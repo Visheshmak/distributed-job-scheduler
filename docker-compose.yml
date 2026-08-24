@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: scheduler_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: jobscheduler
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d jobscheduler"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scheduler_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@postgres:5432/jobscheduler
+      JWT_SECRET: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
+      WORKER_ENABLED: "false" # In multi-container topology, standalone worker services handle execution
+      REAPER_ENABLED: "true"
+      CRON_ENABLED: "true"
+    ports:
+      - "8000:8000"
+
+  worker-1:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scheduler_worker_01
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@postgres:5432/jobscheduler
+    command: ["python", "worker_cli.py", "--worker-id", "worker-pod-01", "--concurrency", "5", "--polling-interval-ms", "1000"]
+
+  worker-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scheduler_worker_02
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgrespassword@postgres:5432/jobscheduler
+    command: ["python", "worker_cli.py", "--worker-id", "worker-pod-02", "--concurrency", "5", "--polling-interval-ms", "1000"]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: scheduler_frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres_data:
