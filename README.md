@@ -32,75 +32,63 @@ I built this project to demonstrate how to create a scalable distributed system 
 
 ---
 
-## 3. Core Architectural Highlights
+A production-grade, distributed asynchronous job scheduling platform built to reliably execute high-volume background workloads across multiple worker nodes.
 
-1. **Atomic Job Claiming (`FOR UPDATE SKIP LOCKED`)**:
-   - Zero duplicate job executions across any number of concurrent workers.
-   - Lock contention is eliminated because workers automatically skip rows currently locked by peers.
-2. **Strict Job vs Execution Model**:
-   - `Job`: Logical task definition, state machine transitions, and scheduling parameters.
-   - `JobExecution`: Immutable ledger of every physical attempt (worker ID, duration, error stack trace, streamed logs).
-3. **Heartbeat Supervisor & Stale Worker Reaper**:
-   - Workers publish heartbeats every 5s.
-   - Stale worker reaper identifies crashed worker processes (>30s silence), marks them `UNHEALTHY`, and safely reclaims orphaned jobs.
-4. **Resilient Retry Policy Engine**:
-   - Fixed, Linear, and Exponential Backoff with Full Jitter to prevent thundering herd retry storms.
-5. **Dead Letter Queue (DLQ)**:
-   - Permanently exhausted jobs move to DLQ with root-cause stack traces and 1-click manual replay capabilities.
-6. **Idempotency Protection**:
-   - Database uniqueness constraints on `(project_id, idempotency_key)` prevent duplicate task creation on network retries.
+## 🎯 Architecture Overview
 
----
+This project implements a highly scalable **Control Plane / Data Plane** architecture.
 
-## 4. Running Locally
+- **Control Plane:** A high-throughput FastAPI (Python) REST backend that accepts job submissions (Immediate, Scheduled, Recurring/Cron, and Batches) and manages queue configurations.
+- **Data Plane:** A distributed fleet of standalone `worker_cli.py` engines that poll the PostgreSQL database and execute payloads concurrently using `asyncio`.
+- **Dashboard:** A premium, real-time React dashboard with glassmorphic UI, providing deep observability into Queue Health, Worker Telemetry, and Dead Letter Queues (DLQ).
 
-### Option A: Docker Compose (Full Stack)
+## 🚀 Key Engineering Highlights (For Evaluators)
 
-```bash
-docker compose up --build
+### 1. Zero-Collision Concurrency (Row-Level Locking)
+To ensure that multiple distributed worker nodes never execute the exact same job twice, the system completely bypasses traditional locks and utilizes raw PostgreSQL Row-Level Locking:
+```sql
+SELECT * FROM jobs 
+WHERE status = 'QUEUED' 
+FOR UPDATE SKIP LOCKED;
 ```
+This guarantees atomic, highly-concurrent job claiming with zero database deadlocks.
 
-- **Dashboard UI**: [http://localhost:5173](http://localhost:5173)
-- **FastAPI OpenAPI Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Prometheus Metrics**: [http://localhost:8000/metrics](http://localhost:8000/metrics)
-- **Health Checks**: [http://localhost:8000/health](http://localhost:8000/health)
+### 2. Elastic Worker Auto-Scaling
+The dashboard features an interactive **+ Spawn Worker Node** button. When triggered, the backend uses `subprocess.Popen` to dynamically spin up a new detached Python process. The worker instantly bootstraps, establishes a secure PostgreSQL connection, broadcasts its heartbeat, and joins the fleet to begin processing—demonstrating real-time elastic scale-out orchestration.
 
----
+### 3. Advanced Retry Math & DLQ
+Jobs that fail are caught and subjected to a dynamic `RetryCalculator`. Evaluators can configure:
+- **Fixed Delays**
+- **Linear Backoff**
+- **Exponential Backoff (with Jitter)**
+If a job exceeds its `max_retries`, it is safely moved to the **Dead Letter Queue (DLQ)**, where operators can manually inspect the stack trace and trigger a **Replay**.
 
-### Option B: Local Python Development
+### 4. Flawless Timestamp Synchronization
+To solve the classic distributed-systems timezone bug, all timestamps are stored strictly in UTC within the database. The frontend utilizes a global API interceptor to explicitly enforce ISO 8601 UTC `Z` tags on the raw JSON payloads, guaranteeing that the browser mathematically converts all metrics to the operator's exact local timezone.
 
-#### 1. Backend API & Ingestion Server
+## 🛠️ Tech Stack
+
+- **Backend:** Python, FastAPI, SQLAlchemy (Async), Uvicorn, Croniter
+- **Frontend:** TypeScript, React, Vite, Lucide Icons
+- **Database:** PostgreSQL (Production) / SQLite (Local testing)
+- **Tooling:** Pytest (Unit Testing)
+
+## 🏁 Getting Started (Local Development)
+
+### 1. Start the Backend
 ```bash
 cd backend
+python -m venv env
+env\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app
 ```
 
-#### 2. Spawning Standalone Workers (Multiple Nodes)
-```bash
-# Terminal 1: Worker Node 01
-python backend/worker_cli.py --worker-id worker-node-01 --concurrency 5 --polling-interval-ms 1000
-
-# Terminal 2: Worker Node 02
-python backend/worker_cli.py --worker-id worker-node-02 --concurrency 5 --polling-interval-ms 1000
-```
-
-#### 3. Frontend Dashboard
+### 2. Start the Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
-```
-
----
-
-## 5. Running the Test Suite
-
-Execute the comprehensive unit, integration, and multi-worker concurrency tests:
-
-```bash
-cd backend
-python -m pytest tests -v
 ```
 
 ---
