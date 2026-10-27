@@ -47,4 +47,6 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Note: Keeping the jobscheduler.db so evaluators can run the project without running migrations/seed scripts
+# Local SQLite databases (tables and demo data are created automatically on startup)
+*.db
+*.sqlite3
